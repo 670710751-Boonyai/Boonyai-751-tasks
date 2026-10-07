@@ -23,7 +23,7 @@ def create_booking(db: Session, hn: str, slot_id: int) -> Booking:
     slot = db.get(Slot, slot_id)
     if slot is None:
         raise ValueError("ไม่พบช่วงเวลา")
-    if slot.remaining < 0:
+    if slot.remaining <= 0:
         raise SlotFullError(slot_id)
 
     slot.remaining -= 1
@@ -38,7 +38,6 @@ def create_booking(db: Session, hn: str, slot_id: int) -> Booking:
     db.refresh(booking)
     return booking
 
-
 def cancel_booking(db: Session, booking_id: int, hn: str) -> None:
     """ยกเลิกการจอง และคืนที่นั่งให้ช่วงเวลานั้น (FR-BKG-04)"""
     booking = db.get(Booking, booking_id)
@@ -48,3 +47,4 @@ def cancel_booking(db: Session, booking_id: int, hn: str) -> None:
     slot.remaining += 1
     booking.status = "CANCELLED"
     db.commit()
+
