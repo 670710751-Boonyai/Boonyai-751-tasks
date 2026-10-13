@@ -1,6 +1,6 @@
 # บันทึกการจองและตัดที่นั่ง (T-03)
 # รองรับ FR-BKG-04
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import Booking, Slot
@@ -8,6 +8,14 @@ from app.db.models import Booking, Slot
 
 class SlotFullError(Exception):
     """ช่วงเวลาที่เลือกไม่มีที่นั่งเหลือแล้ว"""
+
+
+# รองรับ FR-BKG-02
+class ExistingBookingError(Exception):
+    """ผู้รับบริการมีคิวที่ยังไม่ได้ใช้ในวันเดียวกัน"""
+
+    def __init__(self, booking: Booking):
+        self.booking = booking
 
 
 def next_queue_no(db: Session, slot_date) -> str:
@@ -19,14 +27,32 @@ def next_queue_no(db: Session, slot_date) -> str:
 
 
 def create_booking(db: Session, hn: str, slot_id: int) -> Booking:
-    """ยืนยันการจอง: ตรวจที่นั่ง ตัดที่นั่ง บันทึกการจอง ออกหมายเลขคิว (FR-BKG-04)"""
+    """ยืนยันการจองและกันคิวซ้ำวันเดียวกัน (FR-BKG-02, FR-BKG-04)"""
     slot = db.get(Slot, slot_id)
     if slot is None:
         raise ValueError("ไม่พบช่วงเวลา")
-    if slot.remaining <= 0:
+
+    existing_booking = db.scalar(
+        select(Booking)
+        .where(
+            Booking.hn == hn,
+            Booking.booking_date == slot.slot_date,
+            Booking.status == "BOOKED",
+        )
+        .order_by(Booking.id)
+    )
+    if existing_booking is not None:
+        raise ExistingBookingError(existing_booking)
+
+    result = db.execute(
+        update(Slot)
+        .where(Slot.id == slot_id, Slot.remaining > 0)
+        .values(remaining=Slot.remaining - 1)
+    )
+    if result.rowcount != 1:
         raise SlotFullError(slot_id)
 
-    slot.remaining -= 1
+    db.refresh(slot)
     booking = Booking(
         hn=hn,
         slot_id=slot.id,
@@ -37,14 +63,4 @@ def create_booking(db: Session, hn: str, slot_id: int) -> Booking:
     db.commit()
     db.refresh(booking)
     return booking
-
-def cancel_booking(db: Session, booking_id: int, hn: str) -> None:
-    """ยกเลิกการจอง และคืนที่นั่งให้ช่วงเวลานั้น (FR-BKG-04)"""
-    booking = db.get(Booking, booking_id)
-    if booking is None or booking.hn != hn:
-        raise ValueError("ไม่พบการจอง")
-    slot = db.get(Slot, booking.slot_id)
-    slot.remaining += 1
-    booking.status = "CANCELLED"
-    db.commit()
 
